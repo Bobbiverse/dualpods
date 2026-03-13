@@ -144,6 +144,16 @@ final class AudioManager: ObservableObject {
             return
         }
 
+        // Clean up any existing aggregate device first
+        if aggregateDeviceID != kAudioObjectUnknown {
+            print("🧹 Destroying existing aggregate device \(aggregateDeviceID)")
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            aggregateDeviceID = kAudioObjectUnknown
+        }
+        
+        // Also scan for any orphaned DualPods aggregate device from a previous run
+        cleanupOrphanedAggregateDevice()
+
         // Save current default output
         previousDefaultDevice = getCurrentDefaultOutputDevice()
 
@@ -166,13 +176,21 @@ final class AudioManager: ObservableObject {
             kAudioAggregateDeviceIsStackedKey: 0
         ]
 
+        print("🔧 Creating aggregate device with \(selectedDevices.count) sub-devices:")
+        for (i, device) in selectedDevices.enumerated() {
+            print("   \(i == 0 ? "Master" : "Secondary"): \(device.name) (\(device.uid))")
+        }
+        print("📋 Description: \(description)")
+        
         var newDeviceID: AudioObjectID = kAudioObjectUnknown
         let status = AudioHardwareCreateAggregateDevice(description as CFDictionary, &newDeviceID)
 
         if status != noErr {
+            print("❌ AudioHardwareCreateAggregateDevice failed with status \(status)")
             errorMessage = "Failed to create aggregate device (error \(status))"
             return
         }
+        print("✅ Aggregate device created: ID \(newDeviceID)")
 
         aggregateDeviceID = newDeviceID
 
@@ -216,6 +234,37 @@ final class AudioManager: ObservableObject {
             deactivate()
         } else {
             activate()
+        }
+    }
+
+    // MARK: - Cleanup
+    
+    private func cleanupOrphanedAggregateDevice() {
+        // Look for any existing device with our UID and destroy it
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize
+        )
+        guard status == noErr else { return }
+        
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var deviceIDs = [AudioObjectID](repeating: 0, count: deviceCount)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize, &deviceIDs
+        )
+        guard status == noErr else { return }
+        
+        for deviceID in deviceIDs {
+            if let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
+               uid == Self.aggregateDeviceUID {
+                print("🧹 Found orphaned aggregate device \(deviceID), destroying...")
+                AudioHardwareDestroyAggregateDevice(deviceID)
+            }
         }
     }
 
