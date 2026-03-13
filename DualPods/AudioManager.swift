@@ -46,7 +46,6 @@ final class AudioManager: ObservableObject {
     init() {
         print("🔊 AudioManager initializing...")
         refreshDevices()
-        print("📱 Found \(outputDevices.count) output devices")
         installDeviceListListener()
     }
 
@@ -108,6 +107,7 @@ final class AudioManager: ObservableObject {
             newDevices.append(dev)
         }
 
+        print("📱 Found \(newDevices.count) output devices: \(newDevices.map { $0.name })")
         DispatchQueue.main.async {
             self.outputDevices = newDevices
         }

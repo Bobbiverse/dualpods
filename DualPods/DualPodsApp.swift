@@ -7,7 +7,6 @@ struct DualPodsApp: App {
 
     init() {
         print("🎧 DualPods initializing...")
-        print("📊 Audio devices: \(AudioManager().outputDevices.count)")
     }
 
     var body: some Scene {
