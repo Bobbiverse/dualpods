@@ -296,11 +296,26 @@ final class AudioManager: ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var name: CFString?
-        var size = UInt32(MemoryLayout<CFString?>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
-        guard status == noErr, let result = name else { return nil }
-        return result as String
+        
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
+        guard status == noErr, size > 0 else {
+            print("⚠️ getDeviceStringProperty: no data size for device \(deviceID), selector \(selector)")
+            return nil
+        }
+        
+        // Allocate raw memory to receive the CFString pointer
+        let mem = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<CFString>.alignment)
+        defer { mem.deallocate() }
+        
+        status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, mem)
+        guard status == noErr else {
+            print("⚠️ getDeviceStringProperty: get data failed for device \(deviceID), status \(status)")
+            return nil
+        }
+        
+        let cfString = Unmanaged<CFString>.fromOpaque(mem.load(as: UnsafeRawPointer.self)).takeUnretainedValue()
+        return cfString as String
     }
 
     private func getDeviceUInt32Property(_ deviceID: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
