@@ -3,20 +3,59 @@ import AppKit
 
 @main
 struct DualPodsApp: App {
-    @StateObject private var audioManager = AudioManager()
-    @StateObject private var bluetoothMonitor = BluetoothMonitor()
-
-    init() {
-        print("🎧 DualPods initializing...")
-    }
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            ContentView(audioManager: audioManager, bluetoothMonitor: bluetoothMonitor)
-                .frame(width: 300, height: 400)
-        } label: {
-            Image(systemName: "speaker.wave.2.fill")
+        // Empty Settings scene - all UI is in the menu bar
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var statusItem: NSStatusItem!
+    var popover: NSPopover!
+    var audioManager: AudioManager!
+    var bluetoothMonitor: BluetoothMonitor!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        print("🎧 DualPods launched via AppDelegate")
+
+        audioManager = AudioManager()
+        bluetoothMonitor = BluetoothMonitor()
+
+        // Create the status bar item
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+
+        if let button = statusItem.button {
+            button.image = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "DualPods")
+            button.action = #selector(togglePopover)
+            print("✅ Status bar button created")
+        } else {
+            print("❌ Failed to create status bar button")
+        }
+
+        // Create the popover
+        popover = NSPopover()
+        popover.contentSize = NSSize(width: 300, height: 400)
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(
+            rootView: ContentView(audioManager: audioManager, bluetoothMonitor: bluetoothMonitor)
+        )
+
+        print("✅ DualPods ready - look for speaker icon in menu bar")
+    }
+
+    @objc func togglePopover() {
+        guard let button = statusItem.button else { return }
+
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // Ensure popover window becomes key so it can receive events
+            popover.contentViewController?.view.window?.makeKey()
+        }
     }
 }
