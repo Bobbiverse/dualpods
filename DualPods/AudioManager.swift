@@ -44,7 +44,9 @@ final class AudioManager: ObservableObject {
     static let aggregateDeviceUID = "com.dualpods.multi-output"
 
     init() {
+        print("🔊 AudioManager initializing...")
         refreshDevices()
+        print("📱 Found \(outputDevices.count) output devices")
         installDeviceListListener()
     }
 
@@ -137,12 +139,16 @@ final class AudioManager: ObservableObject {
         // Save current default output
         previousDefaultDevice = getCurrentDefaultOutputDevice()
 
-        // Build sub-device list
+        // Build sub-device list with latency offsets
         let subDevices: [[String: Any]] = selectedDevices.map { device in
-            [
+            var subDeviceDict: [String: Any] = [
                 kAudioSubDeviceUIDKey: device.uid,
                 kAudioSubDeviceDriftCompensationKey: 1
-            ] as [String: Any]
+            ]
+            if device.latencyOffset > 0 {
+                subDeviceDict["drift"] = device.latencyOffset
+            }
+            return subDeviceDict
         }
 
         let description: [String: Any] = [
@@ -326,13 +332,17 @@ final class AudioManager: ObservableObject {
         let status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
         guard status == noErr, size > 0 else { return false }
 
-        let bufferListPointer = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
+        // Allocate enough bytes for variable-sized AudioBufferList
+        let bufferListPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(size),
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
         defer { bufferListPointer.deallocate() }
 
         let getStatus = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, bufferListPointer)
         guard getStatus == noErr else { return false }
 
-        let bufferList = bufferListPointer.pointee
+        let bufferList = bufferListPointer.assumingMemoryBound(to: AudioBufferList.self).pointee
         return bufferList.mNumberBuffers > 0
     }
 
