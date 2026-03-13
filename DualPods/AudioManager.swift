@@ -147,28 +147,23 @@ final class AudioManager: ObservableObject {
         // Save current default output
         previousDefaultDevice = getCurrentDefaultOutputDevice()
 
-        // Build sub-device list with latency offsets
-        let subDevices: [[String: Any]] = selectedDevices.map { device in
-            var subDeviceDict: [String: Any] = [
+        // Build sub-device list
+        // Master device (first) has NO drift compensation
+        // Secondary devices have drift compensation enabled to stay in sync
+        let subDevices: [[String: Any]] = selectedDevices.enumerated().map { index, device in
+            [
                 kAudioSubDeviceUIDKey: device.uid,
-                kAudioSubDeviceDriftCompensationKey: 1
-            ]
-            if device.latencyOffset > 0 {
-                subDeviceDict["drift"] = device.latencyOffset
-            }
-            return subDeviceDict
+                kAudioSubDeviceDriftCompensationKey: index == 0 ? 0 : 1
+            ] as [String: Any]
         }
 
-        // kAudioAggregateDeviceIsStackedKey = 1 creates a Multi-Output Device
-        // This sends the SAME audio to ALL sub-devices simultaneously
-        // (vs aggregate which tries to combine them as one clock-synced device)
         let description: [String: Any] = [
             kAudioAggregateDeviceNameKey: Self.aggregateDeviceName,
             kAudioAggregateDeviceUIDKey: Self.aggregateDeviceUID,
             kAudioAggregateDeviceSubDeviceListKey: subDevices,
             kAudioAggregateDeviceMasterSubDeviceKey: selectedDevices[0].uid,
             kAudioAggregateDeviceIsPrivateKey: 0,
-            kAudioAggregateDeviceIsStackedKey: 1
+            kAudioAggregateDeviceIsStackedKey: 0
         ]
 
         var newDeviceID: AudioObjectID = kAudioObjectUnknown
