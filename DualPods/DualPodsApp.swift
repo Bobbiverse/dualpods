@@ -29,7 +29,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "DualPods")
+            // Try SF Symbol first, fall back to text
+            if let img = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: "DualPods") {
+                img.isTemplate = true
+                button.image = img
+                print("✅ Status bar icon set (SF Symbol)")
+            } else {
+                button.title = "🎧"
+                print("⚠️ SF Symbol not found, using emoji")
+            }
             button.action = #selector(togglePopover)
             print("✅ Status bar button created")
         } else {
