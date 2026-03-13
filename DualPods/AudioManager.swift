@@ -83,7 +83,11 @@ final class AudioManager: ObservableObject {
             &dataSize,
             &deviceIDs
         )
-        guard status == noErr else { return }
+        guard status == noErr else {
+            print("⚠️ Failed to get device list, status: \(status)")
+            return
+        }
+        print("🔍 CoreAudio reports \(deviceCount) total devices: \(deviceIDs)")
 
         let previousSelections = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.id, $0.isSelected) })
         let previousVolumes = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.id, $0.volume) })
@@ -110,8 +114,12 @@ final class AudioManager: ObservableObject {
     }
 
     private func queryDevice(_ deviceID: AudioObjectID) -> AudioDevice? {
-        guard let name = getDeviceStringProperty(deviceID, selector: kAudioObjectPropertyName),
-              let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) else {
+        guard let name = getDeviceStringProperty(deviceID, selector: kAudioObjectPropertyName) else {
+            print("⚠️ Device \(deviceID): no name")
+            return nil
+        }
+        guard let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) else {
+            print("⚠️ Device \(deviceID) (\(name)): no UID")
             return nil
         }
 
@@ -290,32 +298,22 @@ final class AudioManager: ObservableObject {
 
     // MARK: - Property Helpers
 
+    // Note: The &name pattern triggers a Swift warning about forming UnsafeMutableRawPointer
+    // to a reference type, but this is the standard CoreAudio pattern and works correctly.
     private func getDeviceStringProperty(_ deviceID: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        
-        var size: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
-        guard status == noErr, size > 0 else {
-            print("⚠️ getDeviceStringProperty: no data size for device \(deviceID), selector \(selector)")
-            return nil
-        }
-        
-        // Allocate raw memory to receive the CFString pointer
-        let mem = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<CFString>.alignment)
-        defer { mem.deallocate() }
-        
-        status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, mem)
+        var name: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
         guard status == noErr else {
-            print("⚠️ getDeviceStringProperty: get data failed for device \(deviceID), status \(status)")
+            print("⚠️ getDeviceStringProperty failed: device \(deviceID), status \(status)")
             return nil
         }
-        
-        let cfString = Unmanaged<CFString>.fromOpaque(mem.load(as: UnsafeRawPointer.self)).takeUnretainedValue()
-        return cfString as String
+        return name as String
     }
 
     private func getDeviceUInt32Property(_ deviceID: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
