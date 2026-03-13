@@ -29,9 +29,10 @@ final class BluetoothMonitor: NSObject, ObservableObject {
         let devices = paired
             .filter { $0.isConnected() }
             .compactMap { device -> BluetoothDeviceInfo? in
-                guard let name = device.name, let address = device.addressString else {
+                guard let address = device.addressString else {
                     return nil
                 }
+                let name = device.name ?? "Unknown Device"
                 // Check if device supports A2DP (audio sink) via service records
                 let isAudio = hasAudioService(device)
                 return BluetoothDeviceInfo(id: address, name: name, isAudioDevice: isAudio)

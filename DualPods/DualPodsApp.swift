@@ -6,10 +6,8 @@ struct DualPodsApp: App {
     @StateObject private var bluetoothMonitor = BluetoothMonitor()
 
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra("DualPods", systemImage: audioManager.isActive ? "headphones.circle.fill" : "headphones.circle") {
             ContentView(audioManager: audioManager, bluetoothMonitor: bluetoothMonitor)
-        } label: {
-            Image(systemName: audioManager.isActive ? "airpodspro" : "airpods")
         }
         .menuBarExtraStyle(.window)
     }
