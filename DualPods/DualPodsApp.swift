@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct DualPodsApp: App {
@@ -10,8 +11,11 @@ struct DualPodsApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("DualPods", systemImage: audioManager.isActive ? "headphones.circle.fill" : "headphones.circle") {
+        MenuBarExtra {
             ContentView(audioManager: audioManager, bluetoothMonitor: bluetoothMonitor)
+                .frame(width: 300, height: 400)
+        } label: {
+            Image(systemName: "speaker.wave.2.fill")
         }
         .menuBarExtraStyle(.window)
     }
