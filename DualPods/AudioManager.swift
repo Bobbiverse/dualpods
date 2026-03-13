@@ -296,18 +296,11 @@ final class AudioManager: ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var size: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
-        guard status == noErr, size > 0 else { return nil }
-        
-        var name: Unmanaged<CFString>?
-        status = withUnsafeMutablePointer(to: &name) { ptr in
-            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size,
-                                       UnsafeMutableRawPointer(ptr))
-        }
-        
-        guard status == noErr, let cfString = name?.takeUnretainedValue() else { return nil }
-        return cfString as String
+        var name: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
+        guard status == noErr, let result = name else { return nil }
+        return result as String
     }
 
     private func getDeviceUInt32Property(_ deviceID: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
