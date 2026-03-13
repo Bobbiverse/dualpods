@@ -63,8 +63,8 @@ final class BluetoothMonitor: NSObject, ObservableObject {
                 // Simplified check: look for known audio UUIDs
                 for (_, value) in dict {
                     if let uuid = value as? IOBluetoothSDPUUID,
-                       uuid.length == 2,
-                       let bytes = uuid.bytes {
+                       uuid.length == 2 {
+                        let bytes = uuid.bytes
                         let val = UInt32(bytes.load(as: UInt8.self)) << 8 |
                                   UInt32(bytes.advanced(by: 1).load(as: UInt8.self))
                         if audioUUIDs.contains(val) {
