@@ -12,12 +12,20 @@ struct AudioDevice: Identifiable, Hashable {
     let isOutput: Bool
     let transportType: UInt32
     var volume: Float = 1.0
-    var latencyOffset: UInt32 = 0
     var isSelected: Bool = false
+    
+    /// Whether this device is a multi-output/aggregate device
+    var isAggregate: Bool = false
+    /// Sub-device IDs (only for aggregate devices)
+    var subDeviceIDs: [AudioObjectID] = []
 
     var isBluetooth: Bool {
         transportType == kAudioDeviceTransportTypeBluetooth ||
         transportType == kAudioDeviceTransportTypeBluetoothLE
+    }
+    
+    var isMultiOutput: Bool {
+        transportType == kAudioDeviceTransportTypeAggregate
     }
 
     func hash(into hasher: inout Hasher) {
@@ -33,6 +41,9 @@ struct AudioDevice: Identifiable, Hashable {
 
 final class AudioManager: ObservableObject {
     @Published var outputDevices: [AudioDevice] = []
+    @Published var multiOutputDevices: [AudioDevice] = []
+    @Published var activeMultiOutput: AudioDevice?
+    @Published var subDevices: [AudioDevice] = []
     @Published var isActive: Bool = false
     @Published var errorMessage: String?
 
@@ -82,44 +93,46 @@ final class AudioManager: ObservableObject {
             &dataSize,
             &deviceIDs
         )
-        guard status == noErr else {
-            print("⚠️ Failed to get device list, status: \(status)")
-            return
-        }
-        print("🔍 CoreAudio reports \(deviceCount) total devices: \(deviceIDs)")
+        guard status == noErr else { return }
 
-        let previousSelections = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.id, $0.isSelected) })
-        let previousVolumes = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.id, $0.volume) })
-        let previousLatencies = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.id, $0.latencyOffset) })
+        var newOutputDevices: [AudioDevice] = []
+        var newMultiOutputDevices: [AudioDevice] = []
 
-        var newDevices: [AudioDevice] = []
         for deviceID in deviceIDs {
-            guard let device = queryDevice(deviceID) else { continue }
-            // Skip our own aggregate device
-            if device.uid == Self.aggregateDeviceUID { continue }
-            // Only output devices
+            guard var device = queryDevice(deviceID) else { continue }
             guard device.isOutput else { continue }
-
-            var dev = device
-            dev.isSelected = previousSelections[deviceID] ?? device.isBluetooth
-            dev.volume = previousVolumes[deviceID] ?? 1.0
-            dev.latencyOffset = previousLatencies[deviceID] ?? 0
-            newDevices.append(dev)
+            // Skip our own aggregate device from the regular list
+            if device.uid == Self.aggregateDeviceUID { continue }
+            
+            if device.isMultiOutput {
+                // This is a multi-output/aggregate device - get its sub-devices
+                device.isAggregate = true
+                device.subDeviceIDs = getSubDeviceIDs(deviceID)
+                newMultiOutputDevices.append(device)
+            } else {
+                device.isSelected = device.isBluetooth
+                newOutputDevices.append(device)
+            }
         }
 
-        print("📱 Found \(newDevices.count) output devices: \(newDevices.map { $0.name })")
+        print("📱 Found \(newOutputDevices.count) output devices, \(newMultiOutputDevices.count) multi-output devices")
+        if !newMultiOutputDevices.isEmpty {
+            for mo in newMultiOutputDevices {
+                print("   🔀 Multi-output: \(mo.name) (sub-devices: \(mo.subDeviceIDs))")
+            }
+        }
+
         DispatchQueue.main.async {
-            self.outputDevices = newDevices
+            self.outputDevices = newOutputDevices
+            self.multiOutputDevices = newMultiOutputDevices
         }
     }
 
     private func queryDevice(_ deviceID: AudioObjectID) -> AudioDevice? {
         guard let name = getDeviceStringProperty(deviceID, selector: kAudioObjectPropertyName) else {
-            print("⚠️ Device \(deviceID): no name")
             return nil
         }
         guard let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) else {
-            print("⚠️ Device \(deviceID) (\(name)): no UID")
             return nil
         }
 
@@ -134,32 +147,84 @@ final class AudioManager: ObservableObject {
             transportType: transport
         )
     }
+    
+    // MARK: - Sub-device enumeration
+    
+    private func getSubDeviceIDs(_ aggregateDeviceID: AudioObjectID) -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(aggregateDeviceID, &address, 0, nil, &dataSize)
+        if status != noErr {
+            // Try the full sub-device list instead
+            address.mSelector = kAudioAggregateDevicePropertyFullSubDeviceList
+            status = AudioObjectGetPropertyDataSize(aggregateDeviceID, &address, 0, nil, &dataSize)
+            guard status == noErr else { return [] }
+        }
+        
+        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        guard count > 0 else { return [] }
+        
+        var subDeviceIDs = [AudioObjectID](repeating: 0, count: count)
+        status = AudioObjectGetPropertyData(aggregateDeviceID, &address, 0, nil, &dataSize, &subDeviceIDs)
+        guard status == noErr else { return [] }
+        
+        return subDeviceIDs
+    }
 
-    // MARK: - Aggregate Device Creation
-
-    func activate() {
+    // MARK: - Activate Multi-Output
+    
+    /// Use an existing multi-output device
+    func activateExisting(_ multiOutput: AudioDevice) {
+        previousDefaultDevice = getCurrentDefaultOutputDevice()
+        
+        // Set as default output
+        setDefaultOutputDevice(multiOutput.id)
+        
+        // Resolve sub-devices
+        var resolved: [AudioDevice] = []
+        for subID in multiOutput.subDeviceIDs {
+            if var device = queryDevice(subID) {
+                device.volume = getVolumeForDevice(subID)
+                resolved.append(device)
+            }
+        }
+        
+        print("✅ Activated multi-output: \(multiOutput.name) with \(resolved.count) sub-devices")
+        for dev in resolved {
+            print("   🔊 \(dev.name) - volume: \(dev.volume)")
+        }
+        
+        DispatchQueue.main.async {
+            self.activeMultiOutput = multiOutput
+            self.subDevices = resolved
+            self.isActive = true
+            self.errorMessage = nil
+        }
+    }
+    
+    /// Create a new multi-output device from selected devices
+    func createAndActivate() {
         let selectedDevices = outputDevices.filter { $0.isSelected }
         guard selectedDevices.count >= 2 else {
             errorMessage = "Select at least 2 devices"
             return
         }
 
-        // Clean up any existing aggregate device first
+        // Clean up any existing DualPods aggregate device
+        cleanupOrphanedAggregateDevice()
         if aggregateDeviceID != kAudioObjectUnknown {
-            print("🧹 Destroying existing aggregate device \(aggregateDeviceID)")
             AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
             aggregateDeviceID = kAudioObjectUnknown
         }
-        
-        // Also scan for any orphaned DualPods aggregate device from a previous run
-        cleanupOrphanedAggregateDevice()
 
-        // Save current default output
         previousDefaultDevice = getCurrentDefaultOutputDevice()
 
-        // Build sub-device list
-        // Master device (first) has NO drift compensation
-        // Secondary devices have drift compensation enabled to stay in sync
+        // Build sub-device list - master has no drift comp, secondaries do
         let subDevices: [[String: Any]] = selectedDevices.enumerated().map { index, device in
             [
                 kAudioSubDeviceUIDKey: device.uid,
@@ -176,71 +241,57 @@ final class AudioManager: ObservableObject {
             kAudioAggregateDeviceIsStackedKey: 0
         ]
 
-        print("🔧 Creating aggregate device with \(selectedDevices.count) sub-devices:")
-        for (i, device) in selectedDevices.enumerated() {
-            print("   \(i == 0 ? "Master" : "Secondary"): \(device.name) (\(device.uid))")
-        }
-        print("📋 Description: \(description)")
-        
+        print("🔧 Creating multi-output device...")
         var newDeviceID: AudioObjectID = kAudioObjectUnknown
         let status = AudioHardwareCreateAggregateDevice(description as CFDictionary, &newDeviceID)
 
         if status != noErr {
-            print("❌ AudioHardwareCreateAggregateDevice failed with status \(status)")
-            errorMessage = "Failed to create aggregate device (error \(status))"
+            print("❌ Failed: \(status)")
+            errorMessage = "Failed to create multi-output device (error \(status))"
             return
         }
-        print("✅ Aggregate device created: ID \(newDeviceID)")
 
+        print("✅ Created aggregate device: \(newDeviceID)")
         aggregateDeviceID = newDeviceID
-
-        // Set as default output
         setDefaultOutputDevice(newDeviceID)
 
-        // Apply volume settings
+        // Build sub-device list for UI
+        var resolved: [AudioDevice] = []
         for device in selectedDevices {
-            setVolumeForDevice(device.id, volume: device.volume)
+            var dev = device
+            dev.volume = getVolumeForDevice(device.id)
+            resolved.append(dev)
         }
 
         DispatchQueue.main.async {
+            self.subDevices = resolved
             self.isActive = true
             self.errorMessage = nil
         }
     }
 
     func deactivate() {
-        guard aggregateDeviceID != kAudioObjectUnknown else { return }
-
         // Restore previous default
         if previousDefaultDevice != kAudioObjectUnknown {
             setDefaultOutputDevice(previousDefaultDevice)
         }
 
-        // Destroy aggregate device
-        let status = AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
-        if status != noErr {
-            print("Warning: Failed to destroy aggregate device (error \(status))")
+        // Destroy our aggregate device if we created one
+        if aggregateDeviceID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            aggregateDeviceID = kAudioObjectUnknown
         }
-
-        aggregateDeviceID = kAudioObjectUnknown
 
         DispatchQueue.main.async {
             self.isActive = false
-        }
-    }
-
-    func toggle() {
-        if isActive {
-            deactivate()
-        } else {
-            activate()
+            self.activeMultiOutput = nil
+            self.subDevices = []
         }
     }
 
     // MARK: - Cleanup
     
     private func cleanupOrphanedAggregateDevice() {
-        // Look for any existing device with our UID and destroy it
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -262,7 +313,7 @@ final class AudioManager: ObservableObject {
         for deviceID in deviceIDs {
             if let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
                uid == Self.aggregateDeviceUID {
-                print("🧹 Found orphaned aggregate device \(deviceID), destroying...")
+                print("🧹 Destroying orphaned aggregate device \(deviceID)")
                 AudioHardwareDestroyAggregateDevice(deviceID)
             }
         }
@@ -271,12 +322,28 @@ final class AudioManager: ObservableObject {
     // MARK: - Volume Control
 
     func setVolume(for device: AudioDevice, volume: Float) {
-        if let index = outputDevices.firstIndex(where: { $0.id == device.id }) {
-            outputDevices[index].volume = volume
+        if let index = subDevices.firstIndex(where: { $0.id == device.id }) {
+            subDevices[index].volume = volume
         }
-        if isActive {
-            setVolumeForDevice(device.id, volume: volume)
+        setVolumeForDevice(device.id, volume: volume)
+        print("🔊 Set volume for \(device.name) to \(Int(volume * 100))%")
+    }
+    
+    private func getVolumeForDevice(_ deviceID: AudioObjectID) -> Float {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var volume: Float = 1.0
+        var size = UInt32(MemoryLayout<Float>.size)
+        var status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
+        if status != noErr {
+            // Try channel 1
+            address.mElement = 1
+            status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
         }
+        return status == noErr ? volume : 1.0
     }
 
     private func setVolumeForDevice(_ deviceID: AudioObjectID, volume: Float) {
@@ -287,32 +354,18 @@ final class AudioManager: ObservableObject {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        // Try main element first, then channel 1
         var status = AudioObjectSetPropertyData(deviceID, &address, 0, nil,
                                                  UInt32(MemoryLayout<Float>.size), &vol)
         if status != noErr {
+            // Try channel 1 and 2 for stereo
             address.mElement = 1
             status = AudioObjectSetPropertyData(deviceID, &address, 0, nil,
                                                  UInt32(MemoryLayout<Float>.size), &vol)
-            // Also try channel 2 for stereo
             if status == noErr {
                 address.mElement = 2
                 AudioObjectSetPropertyData(deviceID, &address, 0, nil,
                                            UInt32(MemoryLayout<Float>.size), &vol)
             }
-        }
-    }
-
-    // MARK: - Latency Offset
-
-    func setLatencyOffset(for device: AudioDevice, offset: UInt32) {
-        if let index = outputDevices.firstIndex(where: { $0.id == device.id }) {
-            outputDevices[index].latencyOffset = offset
-        }
-        // Latency offset requires recreating the aggregate device
-        if isActive {
-            deactivate()
-            activate()
         }
     }
 
@@ -356,10 +409,7 @@ final class AudioManager: ObservableObject {
         var name: CFString = "" as CFString
         var size = UInt32(MemoryLayout<CFString>.size)
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
-        guard status == noErr else {
-            print("⚠️ getDeviceStringProperty failed: device \(deviceID), status \(status)")
-            return nil
-        }
+        guard status == noErr else { return nil }
         return name as String
     }
 
@@ -385,7 +435,6 @@ final class AudioManager: ObservableObject {
         let status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
         guard status == noErr, size > 0 else { return false }
 
-        // Allocate enough bytes for variable-sized AudioBufferList
         let bufferListPointer = UnsafeMutableRawPointer.allocate(
             byteCount: Int(size),
             alignment: MemoryLayout<AudioBufferList>.alignment
