@@ -159,13 +159,16 @@ final class AudioManager: ObservableObject {
             return subDeviceDict
         }
 
+        // kAudioAggregateDeviceIsStackedKey = 1 creates a Multi-Output Device
+        // This sends the SAME audio to ALL sub-devices simultaneously
+        // (vs aggregate which tries to combine them as one clock-synced device)
         let description: [String: Any] = [
             kAudioAggregateDeviceNameKey: Self.aggregateDeviceName,
             kAudioAggregateDeviceUIDKey: Self.aggregateDeviceUID,
             kAudioAggregateDeviceSubDeviceListKey: subDevices,
             kAudioAggregateDeviceMasterSubDeviceKey: selectedDevices[0].uid,
             kAudioAggregateDeviceIsPrivateKey: 0,
-            kAudioAggregateDeviceIsStackedKey: 0
+            kAudioAggregateDeviceIsStackedKey: 1
         ]
 
         var newDeviceID: AudioObjectID = kAudioObjectUnknown
