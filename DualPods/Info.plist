@@ -21,7 +21,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
-    <true/>
+    <false/>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>DualPods needs Bluetooth access to detect connected audio devices like AirPods.</string>
     <key>NSMicrophoneUsageDescription</key>

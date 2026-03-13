@@ -6,18 +6,19 @@ struct DualPodsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Empty Settings scene - all UI is in the menu bar
-        Settings {
-            EmptyView()
+        WindowGroup("DualPods") {
+            ContentView(audioManager: appDelegate.audioManager ?? AudioManager(),
+                        bluetoothMonitor: appDelegate.bluetoothMonitor ?? BluetoothMonitor())
+            .frame(width: 350, height: 500)
         }
     }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem!
-    var popover: NSPopover!
-    var audioManager: AudioManager!
-    var bluetoothMonitor: BluetoothMonitor!
+    var statusItem: NSStatusItem?
+    var popover: NSPopover?
+    var audioManager: AudioManager?
+    var bluetoothMonitor: BluetoothMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎧 DualPods launched via AppDelegate")
@@ -56,13 +57,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePopover() {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem?.button, let popover = popover else { return }
 
         if popover.isShown {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            // Ensure popover window becomes key so it can receive events
             popover.contentViewController?.view.window?.makeKey()
         }
     }
