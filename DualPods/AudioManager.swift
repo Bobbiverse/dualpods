@@ -160,6 +160,15 @@ final class AudioManager: ObservableObject {
         dualPodsDeviceID = newDeviceID
         print("✅ Created persistent DualPods device: \(newDeviceID)")
         
+        // Verify sub-devices were actually added
+        let verifySubDevices = getSubDeviceIDs(newDeviceID)
+        print("   📋 Verified sub-devices (\(verifySubDevices.count)):")
+        for subID in verifySubDevices {
+            if let device = queryDevice(subID) {
+                print("      • \(device.name) (ID: \(subID))")
+            }
+        }
+        
         // Load volumes for the AirPods
         DispatchQueue.main.async {
             for i in 0..<self.airpodsDevices.count {
@@ -249,15 +258,17 @@ final class AudioManager: ObservableObject {
     }
 
     func disable() {
-        isUpdatingState = true
+        // Stop watchdog FIRST, before changing any state
         stopWatchdog()
-
-        if previousDefaultDevice != kAudioObjectUnknown {
-            setDefaultOutputDevice(previousDefaultDevice)
-        }
-
+        
+        // Set disabled state before changing device
         DispatchQueue.main.async {
             self.isEnabled = false
+        }
+        
+        isUpdatingState = true
+        if previousDefaultDevice != kAudioObjectUnknown {
+            setDefaultOutputDevice(previousDefaultDevice)
         }
         
         print("🔴 DualPods disabled")
