@@ -51,6 +51,7 @@ final class AudioManager: ObservableObject {
     private var previousDefaultDevice: AudioObjectID = kAudioObjectUnknown
     private var deviceListListenerBlock: AudioObjectPropertyListenerBlock?
     private var defaultDeviceListenerBlock: AudioObjectPropertyListenerBlock?
+    private var watchdogTimer: Timer?
 
     static let aggregateDeviceName = "DualPods Multi-Output"
     static let aggregateDeviceUID = "com.dualpods.multi-output"
@@ -63,6 +64,7 @@ final class AudioManager: ObservableObject {
     }
 
     deinit {
+        stopWatchdog()
         deactivate()
         removeDeviceListListener()
         removeDefaultDeviceListener()
@@ -207,6 +209,7 @@ final class AudioManager: ObservableObject {
             self.subDevices = resolved
             self.isActive = true
             self.errorMessage = nil
+            self.startWatchdog()
         }
     }
     
@@ -270,10 +273,13 @@ final class AudioManager: ObservableObject {
             self.subDevices = resolved
             self.isActive = true
             self.errorMessage = nil
+            self.startWatchdog()
         }
     }
 
     func deactivate() {
+        stopWatchdog()
+        
         // Restore previous default
         if previousDefaultDevice != kAudioObjectUnknown {
             setDefaultOutputDevice(previousDefaultDevice)
@@ -528,13 +534,33 @@ final class AudioManager: ObservableObject {
     /// Called when the system default output device changes
     /// If we're active and the default switched away from our multi-output, switch it back
     private func handleDefaultDeviceChanged() {
+        restoreMultiOutputIfNeeded(source: "listener")
+    }
+    
+    // MARK: - Watchdog Timer (for aggressive restoration when AirPods wake up)
+    
+    private func startWatchdog() {
+        // Check every second to ensure multi-output stays active
+        // This catches cases where the listener doesn't fire (e.g., rapid AirPods reconnect)
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.restoreMultiOutputIfNeeded(source: "watchdog")
+        }
+    }
+    
+    private func stopWatchdog() {
+        watchdogTimer?.invalidate()
+        watchdogTimer = nil
+    }
+    
+    /// Common restoration logic - called by both listener and watchdog
+    private func restoreMultiOutputIfNeeded(source: String) {
         guard isActive else { return }
         
         let currentDefault = getCurrentDefaultOutputDevice()
         
         // If we're active but the default device is not our aggregate, restore it
         if aggregateDeviceID != kAudioObjectUnknown && currentDefault != aggregateDeviceID {
-            print("⚠️ Default device changed while multi-output active (YouTube skip?) - restoring...")
+            print("⚠️ Default device changed while multi-output active (source: \(source)) - restoring...")
             setDefaultOutputDevice(aggregateDeviceID)
             
             // Re-apply stored volume levels for each sub-device
