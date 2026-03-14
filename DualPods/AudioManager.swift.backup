@@ -12,10 +12,20 @@ struct AudioDevice: Identifiable, Hashable {
     let isOutput: Bool
     let transportType: UInt32
     var volume: Float = 1.0
+    var isSelected: Bool = false
+    
+    /// Whether this device is a multi-output/aggregate device
+    var isAggregate: Bool = false
+    /// Sub-device IDs (only for aggregate devices)
+    var subDeviceIDs: [AudioObjectID] = []
 
     var isBluetooth: Bool {
         transportType == kAudioDeviceTransportTypeBluetooth ||
         transportType == kAudioDeviceTransportTypeBluetoothLE
+    }
+    
+    var isMultiOutput: Bool {
+        transportType == kAudioDeviceTransportTypeAggregate
     }
 
     func hash(into hasher: inout Hasher) {
@@ -30,186 +40,34 @@ struct AudioDevice: Identifiable, Hashable {
 // MARK: - AudioManager
 
 final class AudioManager: ObservableObject {
-    @Published var airpodsDevices: [AudioDevice] = []
-    @Published var isEnabled: Bool = false
+    @Published var outputDevices: [AudioDevice] = []
+    @Published var multiOutputDevices: [AudioDevice] = []
+    @Published var activeMultiOutput: AudioDevice?
+    @Published var subDevices: [AudioDevice] = []
+    @Published var isActive: Bool = false
     @Published var errorMessage: String?
 
-    private var dualPodsDeviceID: AudioObjectID = kAudioObjectUnknown
+    private var aggregateDeviceID: AudioObjectID = kAudioObjectUnknown
     private var previousDefaultDevice: AudioObjectID = kAudioObjectUnknown
     private var deviceListListenerBlock: AudioObjectPropertyListenerBlock?
     private var defaultDeviceListenerBlock: AudioObjectPropertyListenerBlock?
     private var watchdogTimer: Timer?
-    private var isUpdatingState: Bool = false  // Prevent circular updates
 
-    static let aggregateDeviceName = "DualPods"
-    static let aggregateDeviceUID = "com.dualpods.persistent"
+    static let aggregateDeviceName = "DualPods Multi-Output"
+    static let aggregateDeviceUID = "com.dualpods.multi-output"
 
     init() {
         print("🔊 AudioManager initializing...")
         refreshDevices()
-        ensureDualPodsDeviceExists()
         installDeviceListListener()
         installDefaultDeviceListener()
-        syncStateWithSystem()
     }
 
     deinit {
         stopWatchdog()
+        deactivate()
         removeDeviceListListener()
         removeDefaultDeviceListener()
-        // Don't destroy the aggregate device - it's persistent
-    }
-
-    // MARK: - Persistent DualPods Device
-
-    func ensureDualPodsDeviceExists() {
-        // Check if DualPods aggregate device already exists
-        if let existingDevice = findDualPodsDevice() {
-            dualPodsDeviceID = existingDevice.id
-            print("✅ Found existing DualPods device: \(dualPodsDeviceID)")
-            loadAirPodsFromDualPodsDevice(existingDevice)
-            return
-        }
-
-        // Create it if it doesn't exist
-        createDualPodsDevice()
-    }
-
-    private func findDualPodsDevice() -> AudioDevice? {
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var dataSize: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0, nil,
-            &dataSize
-        )
-        guard status == noErr else { return nil }
-
-        let deviceCount = Int(dataSize) / MemoryLayout<AudioObjectID>.size
-        var deviceIDs = [AudioObjectID](repeating: 0, count: deviceCount)
-
-        status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0, nil,
-            &dataSize,
-            &deviceIDs
-        )
-        guard status == noErr else { return nil }
-
-        for deviceID in deviceIDs {
-            if let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
-               uid == Self.aggregateDeviceUID {
-                return queryDevice(deviceID)
-            }
-        }
-
-        return nil
-    }
-
-    private func createDualPodsDevice() {
-        refreshDevices()
-        let connectedAirPods = airpodsDevices
-        
-        guard connectedAirPods.count >= 2 else {
-            errorMessage = "Connect at least 2 AirPods to create DualPods device"
-            print("⚠️ Need at least 2 AirPods, found \(connectedAirPods.count)")
-            return
-        }
-
-        let subDevices: [[String: Any]] = connectedAirPods.enumerated().map { index, device in
-            [
-                kAudioSubDeviceUIDKey: device.uid,
-                kAudioSubDeviceDriftCompensationKey: index == 0 ? 0 : 1
-            ] as [String: Any]
-        }
-
-        let description: [String: Any] = [
-            kAudioAggregateDeviceNameKey: Self.aggregateDeviceName,
-            kAudioAggregateDeviceUIDKey: Self.aggregateDeviceUID,
-            kAudioAggregateDeviceSubDeviceListKey: subDevices,
-            kAudioAggregateDeviceMasterSubDeviceKey: connectedAirPods[0].uid,
-            kAudioAggregateDeviceIsPrivateKey: 0,
-            kAudioAggregateDeviceIsStackedKey: 0
-        ]
-
-        var newDeviceID: AudioObjectID = kAudioObjectUnknown
-        let status = AudioHardwareCreateAggregateDevice(description as CFDictionary, &newDeviceID)
-
-        if status != noErr {
-            errorMessage = "Failed to create DualPods device (error \(status))"
-            print("❌ Failed to create DualPods: \(status)")
-            return
-        }
-
-        dualPodsDeviceID = newDeviceID
-        print("✅ Created persistent DualPods device: \(newDeviceID)")
-        
-        // Load volumes for the AirPods
-        for i in 0..<airpodsDevices.count {
-            airpodsDevices[i].volume = getVolumeForDevice(airpodsDevices[i].id)
-        }
-    }
-
-    private func loadAirPodsFromDualPodsDevice(_ device: AudioDevice) {
-        let subDeviceIDs = getSubDeviceIDs(device.id)
-        var devices: [AudioDevice] = []
-        
-        for subID in subDeviceIDs {
-            if var dev = queryDevice(subID), dev.isBluetooth {
-                dev.volume = getVolumeForDevice(subID)
-                devices.append(dev)
-            }
-        }
-        
-        DispatchQueue.main.async {
-            self.airpodsDevices = devices
-        }
-        print("📱 Loaded \(devices.count) AirPods from DualPods device")
-    }
-
-    // MARK: - Enable / Disable
-
-    func enable() {
-        guard dualPodsDeviceID != kAudioObjectUnknown else {
-            errorMessage = "DualPods device not found"
-            return
-        }
-
-        isUpdatingState = true
-        previousDefaultDevice = getCurrentDefaultOutputDevice()
-        setDefaultOutputDevice(dualPodsDeviceID)
-        
-        DispatchQueue.main.async {
-            self.isEnabled = true
-            self.errorMessage = nil
-        }
-        
-        startWatchdog()
-        print("✅ DualPods enabled")
-        isUpdatingState = false
-    }
-
-    func disable() {
-        isUpdatingState = true
-        stopWatchdog()
-
-        if previousDefaultDevice != kAudioObjectUnknown {
-            setDefaultOutputDevice(previousDefaultDevice)
-        }
-
-        DispatchQueue.main.async {
-            self.isEnabled = false
-        }
-        
-        print("🔴 DualPods disabled")
-        isUpdatingState = false
     }
 
     // MARK: - Device Enumeration
@@ -242,19 +100,37 @@ final class AudioManager: ObservableObject {
         )
         guard status == noErr else { return }
 
-        var newAirPods: [AudioDevice] = []
+        var newOutputDevices: [AudioDevice] = []
+        var newMultiOutputDevices: [AudioDevice] = []
 
         for deviceID in deviceIDs {
             guard var device = queryDevice(deviceID) else { continue }
-            guard device.isOutput && device.isBluetooth else { continue }
-            device.volume = getVolumeForDevice(deviceID)
-            newAirPods.append(device)
+            guard device.isOutput else { continue }
+            // Skip our own aggregate device from the regular list
+            if device.uid == Self.aggregateDeviceUID { continue }
+            
+            if device.isMultiOutput {
+                // This is a multi-output/aggregate device - get its sub-devices
+                device.isAggregate = true
+                device.subDeviceIDs = getSubDeviceIDs(deviceID)
+                newMultiOutputDevices.append(device)
+            } else {
+                device.isSelected = device.isBluetooth
+                newOutputDevices.append(device)
+            }
+        }
+
+        print("📱 Found \(newOutputDevices.count) output devices, \(newMultiOutputDevices.count) multi-output devices")
+        if !newMultiOutputDevices.isEmpty {
+            for mo in newMultiOutputDevices {
+                print("   🔀 Multi-output: \(mo.name) (sub-devices: \(mo.subDeviceIDs))")
+            }
         }
 
         DispatchQueue.main.async {
-            self.airpodsDevices = newAirPods
+            self.outputDevices = newOutputDevices
+            self.multiOutputDevices = newMultiOutputDevices
         }
-        print("📱 Found \(newAirPods.count) AirPods devices")
     }
 
     private func queryDevice(_ deviceID: AudioObjectID) -> AudioDevice? {
@@ -276,42 +152,192 @@ final class AudioManager: ObservableObject {
             transportType: transport
         )
     }
-
+    
+    // MARK: - Sub-device enumeration
+    
     private func getSubDeviceIDs(_ aggregateDeviceID: AudioObjectID) -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-
+        
         var dataSize: UInt32 = 0
         var status = AudioObjectGetPropertyDataSize(aggregateDeviceID, &address, 0, nil, &dataSize)
         if status != noErr {
+            // Try the full sub-device list instead
             address.mSelector = kAudioAggregateDevicePropertyFullSubDeviceList
             status = AudioObjectGetPropertyDataSize(aggregateDeviceID, &address, 0, nil, &dataSize)
             guard status == noErr else { return [] }
         }
-
+        
         let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
         guard count > 0 else { return [] }
-
+        
         var subDeviceIDs = [AudioObjectID](repeating: 0, count: count)
         status = AudioObjectGetPropertyData(aggregateDeviceID, &address, 0, nil, &dataSize, &subDeviceIDs)
         guard status == noErr else { return [] }
-
+        
         return subDeviceIDs
+    }
+
+    // MARK: - Activate Multi-Output
+    
+    /// Use an existing multi-output device
+    func activateExisting(_ multiOutput: AudioDevice) {
+        previousDefaultDevice = getCurrentDefaultOutputDevice()
+        
+        // Set as default output
+        setDefaultOutputDevice(multiOutput.id)
+        
+        // Resolve sub-devices
+        var resolved: [AudioDevice] = []
+        for subID in multiOutput.subDeviceIDs {
+            if var device = queryDevice(subID) {
+                device.volume = getVolumeForDevice(subID)
+                resolved.append(device)
+            }
+        }
+        
+        print("✅ Activated multi-output: \(multiOutput.name) with \(resolved.count) sub-devices")
+        for dev in resolved {
+            print("   🔊 \(dev.name) - volume: \(dev.volume)")
+        }
+        
+        DispatchQueue.main.async {
+            self.activeMultiOutput = multiOutput
+            self.subDevices = resolved
+            self.isActive = true
+            self.errorMessage = nil
+            self.startWatchdog()
+        }
+    }
+    
+    /// Create a new multi-output device from selected devices
+    func createAndActivate() {
+        let selectedDevices = outputDevices.filter { $0.isSelected }
+        guard selectedDevices.count >= 2 else {
+            errorMessage = "Select at least 2 devices"
+            return
+        }
+
+        // Clean up any existing DualPods aggregate device
+        cleanupOrphanedAggregateDevice()
+        if aggregateDeviceID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            aggregateDeviceID = kAudioObjectUnknown
+        }
+
+        previousDefaultDevice = getCurrentDefaultOutputDevice()
+
+        // Build sub-device list - master has no drift comp, secondaries do
+        let subDevices: [[String: Any]] = selectedDevices.enumerated().map { index, device in
+            [
+                kAudioSubDeviceUIDKey: device.uid,
+                kAudioSubDeviceDriftCompensationKey: index == 0 ? 0 : 1
+            ] as [String: Any]
+        }
+
+        let description: [String: Any] = [
+            kAudioAggregateDeviceNameKey: Self.aggregateDeviceName,
+            kAudioAggregateDeviceUIDKey: Self.aggregateDeviceUID,
+            kAudioAggregateDeviceSubDeviceListKey: subDevices,
+            kAudioAggregateDeviceMasterSubDeviceKey: selectedDevices[0].uid,
+            kAudioAggregateDeviceIsPrivateKey: 0,
+            kAudioAggregateDeviceIsStackedKey: 0
+        ]
+
+        print("🔧 Creating multi-output device...")
+        var newDeviceID: AudioObjectID = kAudioObjectUnknown
+        let status = AudioHardwareCreateAggregateDevice(description as CFDictionary, &newDeviceID)
+
+        if status != noErr {
+            print("❌ Failed: \(status)")
+            errorMessage = "Failed to create multi-output device (error \(status))"
+            return
+        }
+
+        print("✅ Created aggregate device: \(newDeviceID)")
+        aggregateDeviceID = newDeviceID
+        setDefaultOutputDevice(newDeviceID)
+
+        // Build sub-device list for UI
+        var resolved: [AudioDevice] = []
+        for device in selectedDevices {
+            var dev = device
+            dev.volume = getVolumeForDevice(device.id)
+            resolved.append(dev)
+        }
+
+        DispatchQueue.main.async {
+            self.subDevices = resolved
+            self.isActive = true
+            self.errorMessage = nil
+            self.startWatchdog()
+        }
+    }
+
+    func deactivate() {
+        stopWatchdog()
+        
+        // Restore previous default
+        if previousDefaultDevice != kAudioObjectUnknown {
+            setDefaultOutputDevice(previousDefaultDevice)
+        }
+
+        // Destroy our aggregate device if we created one
+        if aggregateDeviceID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            aggregateDeviceID = kAudioObjectUnknown
+        }
+
+        DispatchQueue.main.async {
+            self.isActive = false
+            self.activeMultiOutput = nil
+            self.subDevices = []
+        }
+    }
+
+    // MARK: - Cleanup
+    
+    private func cleanupOrphanedAggregateDevice() {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize
+        )
+        guard status == noErr else { return }
+        
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var deviceIDs = [AudioObjectID](repeating: 0, count: deviceCount)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize, &deviceIDs
+        )
+        guard status == noErr else { return }
+        
+        for deviceID in deviceIDs {
+            if let uid = getDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
+               uid == Self.aggregateDeviceUID {
+                print("🧹 Destroying orphaned aggregate device \(deviceID)")
+                AudioHardwareDestroyAggregateDevice(deviceID)
+            }
+        }
     }
 
     // MARK: - Volume Control
 
     func setVolume(for device: AudioDevice, volume: Float) {
-        if let index = airpodsDevices.firstIndex(where: { $0.id == device.id }) {
-            airpodsDevices[index].volume = volume
+        if let index = subDevices.firstIndex(where: { $0.id == device.id }) {
+            subDevices[index].volume = volume
         }
         setVolumeForDevice(device.id, volume: volume)
         print("🔊 Set volume for \(device.name) to \(Int(volume * 100))%")
     }
-
+    
     private func getVolumeForDevice(_ deviceID: AudioObjectID) -> Float {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
@@ -322,6 +348,7 @@ final class AudioManager: ObservableObject {
         var size = UInt32(MemoryLayout<Float>.size)
         var status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
         if status != noErr {
+            // Try channel 1
             address.mElement = 1
             status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
         }
@@ -339,6 +366,7 @@ final class AudioManager: ObservableObject {
         var status = AudioObjectSetPropertyData(deviceID, &address, 0, nil,
                                                  UInt32(MemoryLayout<Float>.size), &vol)
         if status != noErr {
+            // Try channel 1 and 2 for stereo
             address.mElement = 1
             status = AudioObjectSetPropertyData(deviceID, &address, 0, nil,
                                                  UInt32(MemoryLayout<Float>.size), &vol)
@@ -379,6 +407,8 @@ final class AudioManager: ObservableObject {
 
     // MARK: - Property Helpers
 
+    // Note: The &name pattern triggers a Swift warning about forming UnsafeMutableRawPointer
+    // to a reference type, but this is the standard CoreAudio pattern and works correctly.
     private func getDeviceStringProperty(_ deviceID: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
@@ -463,21 +493,21 @@ final class AudioManager: ObservableObject {
             block
         )
     }
-
-    // MARK: - Default Device Listener (Bi-directional sync)
-
+    
+    // MARK: - Default Device Listener (Fix for YouTube skip bug)
+    
     private func installDefaultDeviceListener() {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-
+        
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.handleDefaultDeviceChanged()
         }
         self.defaultDeviceListenerBlock = block
-
+        
         AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &address,
@@ -485,7 +515,7 @@ final class AudioManager: ObservableObject {
             block
         )
     }
-
+    
     private func removeDefaultDeviceListener() {
         guard let block = defaultDeviceListenerBlock else { return }
         var address = AudioObjectPropertyAddress(
@@ -500,69 +530,46 @@ final class AudioManager: ObservableObject {
             block
         )
     }
-
+    
+    /// Called when the system default output device changes
+    /// If we're active and the default switched away from our multi-output, switch it back
     private func handleDefaultDeviceChanged() {
-        guard !isUpdatingState else { return }  // Ignore changes we made ourselves
-        syncStateWithSystem()
-        restoreIfEnabled()
+        restoreMultiOutputIfNeeded(source: "listener")
     }
-
-    /// Sync app state with system default device
-    private func syncStateWithSystem() {
-        let current = getCurrentDefaultOutputDevice()
-
-        if current == dualPodsDeviceID && !isEnabled {
-            // User manually selected DualPods - enable it
-            print("📍 User manually selected DualPods - enabling")
-            DispatchQueue.main.async {
-                self.isEnabled = true
-            }
-            startWatchdog()
-        } else if current != dualPodsDeviceID && isEnabled {
-            // User manually selected another device - disable watchdog
-            print("📍 User manually selected another device - disabling")
-            DispatchQueue.main.async {
-                self.isEnabled = false
-            }
-            stopWatchdog()
-        }
-    }
-
-    // MARK: - Watchdog Timer (only when enabled)
-
+    
+    // MARK: - Watchdog Timer (for aggressive restoration when AirPods wake up)
+    
     private func startWatchdog() {
-        guard watchdogTimer == nil else { return }
+        // Check every second to ensure multi-output stays active
+        // This catches cases where the listener doesn't fire (e.g., rapid AirPods reconnect)
         watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.restoreIfEnabled()
+            self?.restoreMultiOutputIfNeeded(source: "watchdog")
         }
-        print("🐕 Watchdog started")
     }
-
+    
     private func stopWatchdog() {
         watchdogTimer?.invalidate()
         watchdogTimer = nil
-        print("🐕 Watchdog stopped")
     }
-
-    /// Restore DualPods if enabled and system switched away (watchdog + listener)
-    private func restoreIfEnabled() {
-        guard isEnabled else { return }
-        guard dualPodsDeviceID != kAudioObjectUnknown else { return }
-
+    
+    /// Common restoration logic - called by both listener and watchdog
+    private func restoreMultiOutputIfNeeded(source: String) {
+        guard isActive else { return }
+        
         let currentDefault = getCurrentDefaultOutputDevice()
-
-        if currentDefault != dualPodsDeviceID {
-            print("⚠️ Default device changed while enabled - restoring DualPods...")
-            isUpdatingState = true
-            setDefaultOutputDevice(dualPodsDeviceID)
-
-            // Re-apply stored volume levels
-            for device in airpodsDevices {
+        
+        // If we're active but the default device is not our aggregate, restore it
+        if aggregateDeviceID != kAudioObjectUnknown && currentDefault != aggregateDeviceID {
+            print("⚠️ Default device changed while multi-output active (source: \(source)) - restoring...")
+            setDefaultOutputDevice(aggregateDeviceID)
+            
+            // Re-apply stored volume levels for each sub-device
+            for device in subDevices {
                 setVolumeForDevice(device.id, volume: device.volume)
+                print("🔊 Restored volume for \(device.name) to \(Int(device.volume * 100))%")
             }
-
-            print("✅ DualPods restored with volumes")
-            isUpdatingState = false
+            
+            print("✅ Multi-output restored as default device with volumes")
         }
     }
 }

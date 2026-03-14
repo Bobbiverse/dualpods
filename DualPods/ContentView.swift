@@ -12,9 +12,9 @@ struct ContentView: View {
                     .font(.headline)
                 Spacer()
                 Circle()
-                    .fill(audioManager.isActive ? Color.green : Color.gray)
+                    .fill(audioManager.isEnabled ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
-                Text(audioManager.isActive ? "Active" : "Inactive")
+                Text(audioManager.isEnabled ? "Enabled" : "Disabled")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -31,15 +31,79 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
+                .padding(.vertical, 4)
             }
 
-            if audioManager.isActive {
-                // ACTIVE STATE: Show sub-device volume controls
-                activeView
-            } else {
-                // INACTIVE STATE: Show multi-output devices and device selection
-                inactiveView
+            // Toggle button
+            Button(action: {
+                if audioManager.isEnabled {
+                    audioManager.disable()
+                } else {
+                    audioManager.enable()
+                }
+            }) {
+                HStack {
+                    Image(systemName: audioManager.isEnabled ? "stop.circle.fill" : "play.circle.fill")
+                    Text(audioManager.isEnabled ? "Disable DualPods" : "Enable DualPods")
+                }
+                .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(audioManager.isEnabled ? .red : .blue)
+
+            Divider()
+
+            // Volume controls
+            Text("Volume Controls")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            if audioManager.airpodsDevices.isEmpty {
+                Text("No AirPods detected. Connect AirPods and restart the app.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(audioManager.airpodsDevices) { device in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "airpodspro")
+                                .foregroundColor(audioManager.isEnabled ? .blue : .gray)
+                            Text(device.name)
+                                .font(.body)
+                                .foregroundColor(audioManager.isEnabled ? .primary : .secondary)
+                            Spacer()
+                            Text("\(Int(device.volume * 100))%")
+                                .font(.caption)
+                                .foregroundColor(audioManager.isEnabled ? .secondary : Color.secondary.opacity(0.5))
+                        }
+
+                        HStack {
+                            Image(systemName: "speaker")
+                                .font(.caption)
+                                .foregroundColor(audioManager.isEnabled ? .primary : .gray)
+                            Slider(
+                                value: Binding(
+                                    get: { device.volume },
+                                    set: { newVal in
+                                        audioManager.setVolume(for: device, volume: newVal)
+                                    }
+                                ),
+                                in: 0...1
+                            )
+                            .disabled(!audioManager.isEnabled)
+                            Image(systemName: "speaker.wave.3")
+                                .font(.caption)
+                                .foregroundColor(audioManager.isEnabled ? .primary : .gray)
+                        }
+                    }
+                    .padding(8)
+                    .background(audioManager.isEnabled ? Color.blue.opacity(0.1) : Color.gray.opacity(0.05))
+                    .cornerRadius(8)
+                }
+            }
+
+            Spacer()
 
             Divider()
 
@@ -48,13 +112,10 @@ struct ContentView: View {
                 Button("Refresh") {
                     audioManager.refreshDevices()
                 }
+                .disabled(audioManager.isEnabled)
+                
                 Spacer()
-                if audioManager.isActive {
-                    Button("Deactivate") {
-                        audioManager.deactivate()
-                    }
-                    .foregroundColor(.red)
-                }
+                
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
                 }
@@ -64,161 +125,5 @@ struct ContentView: View {
         .onAppear {
             audioManager.refreshDevices()
         }
-    }
-    
-    // MARK: - Active View (volume controls)
-    
-    var activeView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let multiOutput = audioManager.activeMultiOutput {
-                Text("Playing through: \(multiOutput.name)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Text("Volume Controls")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            ForEach(audioManager.subDevices) { device in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: device.isBluetooth ? "airpodspro" : "speaker.wave.2")
-                            .foregroundColor(.blue)
-                        Text(device.name)
-                            .font(.body)
-                        Spacer()
-                        Text("\(Int(device.volume * 100))%")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    HStack {
-                        Image(systemName: "speaker")
-                            .font(.caption)
-                        Slider(
-                            value: Binding(
-                                get: { device.volume },
-                                set: { newVal in
-                                    audioManager.setVolume(for: device, volume: newVal)
-                                }
-                            ),
-                            in: 0...1
-                        )
-                        Image(systemName: "speaker.wave.3")
-                            .font(.caption)
-                    }
-                }
-                .padding(8)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
-            }
-            
-            if audioManager.subDevices.isEmpty {
-                Text("No sub-devices found")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-    
-    // MARK: - Inactive View (device selection)
-    
-    var inactiveView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Existing multi-output devices
-            if !audioManager.multiOutputDevices.isEmpty {
-                Text("Existing Multi-Output Devices")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                ForEach(audioManager.multiOutputDevices) { device in
-                    Button(action: {
-                        audioManager.activateExisting(device)
-                    }) {
-                        HStack {
-                            Image(systemName: "arrow.triangle.merge")
-                                .foregroundColor(.green)
-                            VStack(alignment: .leading) {
-                                Text(device.name)
-                                    .font(.body)
-                                Text("\(device.subDeviceIDs.count) sub-devices")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            Text("Use")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.green.opacity(0.2))
-                                .cornerRadius(4)
-                        }
-                        .padding(8)
-                        .background(Color.green.opacity(0.05))
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                }
-                
-                Divider()
-            }
-            
-            // Output devices for creating new multi-output
-            Text("Output Devices")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-
-            ScrollView {
-                VStack(spacing: 4) {
-                    ForEach(audioManager.outputDevices) { device in
-                        deviceRow(device)
-                    }
-                }
-            }
-
-            // Create button
-            let selectedCount = audioManager.outputDevices.filter(\.isSelected).count
-            Button(action: {
-                audioManager.createAndActivate()
-            }) {
-                HStack {
-                    Image(systemName: "play.circle.fill")
-                    Text("Create Multi-Output (\(selectedCount) selected)")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(selectedCount < 2)
-        }
-    }
-
-    // MARK: - Device Row
-
-    func deviceRow(_ device: AudioDevice) -> some View {
-        HStack {
-            Toggle(isOn: Binding(
-                get: { device.isSelected },
-                set: { newVal in
-                    if let index = audioManager.outputDevices.firstIndex(where: { $0.id == device.id }) {
-                        audioManager.outputDevices[index].isSelected = newVal
-                    }
-                }
-            )) {
-                HStack {
-                    Image(systemName: device.isBluetooth ? "airpodspro" : "speaker.wave.2")
-                    VStack(alignment: .leading) {
-                        Text(device.name)
-                        if device.isBluetooth {
-                            Text("Bluetooth")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
-            .toggleStyle(.checkbox)
-        }
-        .padding(.vertical, 2)
     }
 }
