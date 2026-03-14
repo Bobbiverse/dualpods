@@ -536,7 +536,14 @@ final class AudioManager: ObservableObject {
         if aggregateDeviceID != kAudioObjectUnknown && currentDefault != aggregateDeviceID {
             print("⚠️ Default device changed while multi-output active (YouTube skip?) - restoring...")
             setDefaultOutputDevice(aggregateDeviceID)
-            print("✅ Multi-output restored as default device")
+            
+            // Re-apply stored volume levels for each sub-device
+            for device in subDevices {
+                setVolumeForDevice(device.id, volume: device.volume)
+                print("🔊 Restored volume for \(device.name) to \(Int(device.volume * 100))%")
+            }
+            
+            print("✅ Multi-output restored as default device with volumes")
         }
     }
 }
