@@ -113,13 +113,18 @@ final class AudioManager: ObservableObject {
     }
 
     private func createDualPodsDevice() {
-        refreshDevices()
-        let connectedAirPods = airpodsDevices
+        // Get AirPods synchronously (don't rely on @Published airpodsDevices)
+        let connectedAirPods = getAirPodsDevices()
         
         guard connectedAirPods.count >= 2 else {
             errorMessage = "Connect at least 2 AirPods to create DualPods device"
             print("⚠️ Need at least 2 AirPods, found \(connectedAirPods.count)")
             return
+        }
+        
+        // Update the published array
+        DispatchQueue.main.async {
+            self.airpodsDevices = connectedAirPods
         }
 
         print("🔧 Creating DualPods device with \(connectedAirPods.count) AirPods:")
@@ -156,9 +161,52 @@ final class AudioManager: ObservableObject {
         print("✅ Created persistent DualPods device: \(newDeviceID)")
         
         // Load volumes for the AirPods
-        for i in 0..<airpodsDevices.count {
-            airpodsDevices[i].volume = getVolumeForDevice(airpodsDevices[i].id)
+        DispatchQueue.main.async {
+            for i in 0..<self.airpodsDevices.count {
+                self.airpodsDevices[i].volume = self.getVolumeForDevice(self.airpodsDevices[i].id)
+            }
         }
+    }
+    
+    /// Get AirPods devices synchronously (for device creation)
+    private func getAirPodsDevices() -> [AudioDevice] {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0, nil,
+            &dataSize
+        )
+        guard status == noErr else { return [] }
+
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var deviceIDs = [AudioObjectID](repeating: 0, count: deviceCount)
+
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0, nil,
+            &dataSize,
+            &deviceIDs
+        )
+        guard status == noErr else { return [] }
+
+        var airpods: [AudioDevice] = []
+
+        for deviceID in deviceIDs {
+            guard var device = queryDevice(deviceID) else { continue }
+            guard device.isOutput && device.isBluetooth else { continue }
+            device.volume = getVolumeForDevice(deviceID)
+            airpods.append(device)
+        }
+
+        return airpods
     }
 
     private func loadAirPodsFromDualPodsDevice(_ device: AudioDevice) {
