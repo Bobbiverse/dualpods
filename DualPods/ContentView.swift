@@ -81,7 +81,7 @@ struct ContentView: View {
                         HStack {
                             Image(systemName: "speaker")
                                 .font(.caption)
-                                .foregroundColor(audioManager.isEnabled ? .primary : .gray)
+                                .foregroundColor(.primary)
                             Slider(
                                 value: Binding(
                                     get: { device.volume },
@@ -91,10 +91,9 @@ struct ContentView: View {
                                 ),
                                 in: 0...1
                             )
-                            .disabled(!audioManager.isEnabled)
                             Image(systemName: "speaker.wave.3")
                                 .font(.caption)
-                                .foregroundColor(audioManager.isEnabled ? .primary : .gray)
+                                .foregroundColor(.primary)
                         }
                     }
                     .padding(8)
