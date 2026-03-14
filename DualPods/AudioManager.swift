@@ -47,10 +47,60 @@ final class AudioManager: ObservableObject {
     init() {
         print("🔊 AudioManager initializing...")
         refreshDevices()
+        debugPrintAllAggregateDevices()
         ensureDualPodsDeviceExists()
         installDeviceListListener()
         installDefaultDeviceListener()
         syncStateWithSystem()
+    }
+    
+    // MARK: - Debug
+    
+    private func debugPrintAllAggregateDevices() {
+        print("🔍 Inspecting all aggregate devices on system...")
+        
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0, nil,
+            &dataSize
+        )
+        guard status == noErr else { return }
+        
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var deviceIDs = [AudioObjectID](repeating: 0, count: deviceCount)
+        
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0, nil,
+            &dataSize,
+            &deviceIDs
+        )
+        guard status == noErr else { return }
+        
+        for deviceID in deviceIDs {
+            guard let device = queryDevice(deviceID) else { continue }
+            guard let transport = getDeviceUInt32Property(deviceID, selector: kAudioDevicePropertyTransportType) else { continue }
+            
+            if transport == kAudioDeviceTransportTypeAggregate {
+                print("   🔀 \(device.name) (UID: \(device.uid))")
+                let subDevices = getSubDeviceIDs(deviceID)
+                print("      Sub-devices (\(subDevices.count)):")
+                for subID in subDevices {
+                    if let sub = queryDevice(subID) {
+                        print("         • \(sub.name)")
+                    }
+                }
+            }
+        }
     }
 
     deinit {
