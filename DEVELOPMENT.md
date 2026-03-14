@@ -56,7 +56,7 @@
 
 ### 🐛 Audio Routing Resets on YouTube Shorts Skip
 
-**Status:** Open (2026-03-14)
+**Status:** ✅ Fixed (2026-03-14)
 
 **Problem:**
 - Multi-output works initially
@@ -65,49 +65,37 @@
 
 **Root Cause:**
 - YouTube (or macOS) resets audio routing when loading a new video
-- App doesn't detect when the default output device changes
-- App shows `isActive = true` but system is no longer using the multi-output device
+- App wasn't detecting when the default output device changes
 
-**Fix Needed:**
-Add a property listener for `kAudioHardwarePropertyDefaultOutputDevice` to detect when the system switches away from our aggregate device. Options:
+**Fix:**
+- Added property listener for `kAudioHardwarePropertyDefaultOutputDevice`
+- Added watchdog timer (1-second interval) for aggressive restoration
+- Automatically switches back to multi-output when system tries to change device
+- Re-applies stored volume levels after restoration
 
-1. **Sticky Mode (Recommended):** Automatically switch back to multi-output device
-2. **Update UI:** Set `isActive = false` and notify user
+**Commits:**
+- `5d11c48` - Initial fix with property listener
+- `ec2d8f7` - Added volume restoration
+- `c40a785` - Added watchdog timer for AirPods wake-up events
 
-**Implementation:**
-```swift
-// In AudioManager.init() - add listener for default device changes
-private func installDefaultDeviceListener() {
-    var address = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain
-    )
-    
-    let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-        self?.handleDefaultDeviceChanged()
-    }
-    
-    AudioObjectAddPropertyListenerBlock(
-        AudioObjectID(kAudioObjectSystemObject),
-        &address,
-        DispatchQueue.main,
-        block
-    )
-}
+### 🐛 Multi-Output Resets When AirPods Wake Up
 
-private func handleDefaultDeviceChanged() {
-    guard isActive else { return }
-    
-    let currentDefault = getCurrentDefaultOutputDevice()
-    
-    // If we're active but the default device is not our aggregate, switch back
-    if aggregateDeviceID != kAudioObjectUnknown && currentDefault != aggregateDeviceID {
-        print("⚠️ Default device changed while active - restoring multi-output")
-        setDefaultOutputDevice(aggregateDeviceID)
-    }
-}
-```
+**Status:** ✅ Fixed (2026-03-14)
+
+**Problem:**
+- User removes AirPod from ear and puts it back in
+- macOS auto-switches to that AirPods device (away from multi-output)
+- Volume settings also reset
+
+**Root Cause:**
+- macOS automatically switches to AirPods when they wake up (helpful but annoying)
+- Property listener alone doesn't always catch rapid reconnection events
+
+**Fix:**
+- Added 1-second watchdog timer that runs only when multi-output is active
+- Timer checks default device and restores if needed
+- More aggressive than property listener alone
+- Combined with volume restoration ensures complete state recovery
 
 ## Development Workflow
 
