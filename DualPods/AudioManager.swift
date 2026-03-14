@@ -41,8 +41,8 @@ final class AudioManager: ObservableObject {
     private var watchdogTimer: Timer?
     private var isUpdatingState: Bool = false  // Prevent circular updates
 
-    static let aggregateDeviceName = "DualPods"
-    static let aggregateDeviceUID = "com.dualpods.persistent"
+    static let aggregateDeviceName = "DualPods Multi-Output"
+    static let aggregateDeviceUID = "com.dualpods.multi-output"
 
     init() {
         print("🔊 AudioManager initializing...")
