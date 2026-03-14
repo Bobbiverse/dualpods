@@ -10,6 +10,7 @@ Route system audio to multiple Bluetooth audio devices simultaneously on macOS. 
 - **Per-device volume control** — the big missing feature from macOS built-in Multi-Output
 - **Latency offset** per device to fix sync issues
 - **One-click activate/deactivate** — automatically sets system default output
+- **Persistent routing** — automatically restores multi-output if apps try to change audio device (fixes YouTube skip bug)
 - **Graceful cleanup** — removes the aggregate device on quit
 
 ## Requirements
@@ -53,6 +54,11 @@ DualPods uses the CoreAudio `AudioHardwareCreateAggregateDevice` API to create a
 - The app runs as an agent (`LSUIElement = true`) so it only appears in the menu bar
 - Bluetooth devices must already be connected/paired via System Settings
 - Volume control works on the sub-devices directly, not the aggregate device
+- **Persistent routing** — app monitors default output device and automatically restores multi-output if another app tries to change it (e.g., YouTube Shorts skip)
+
+## Development
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture details, known issues, and debugging guide.
 
 ## License
 
