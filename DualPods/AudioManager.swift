@@ -65,13 +65,12 @@ final class AudioManager: ObservableObject {
     func ensureDualPodsDeviceExists() {
         // Check if DualPods aggregate device already exists
         if let existingDevice = findDualPodsDevice() {
-            dualPodsDeviceID = existingDevice.id
-            print("✅ Found existing DualPods device: \(dualPodsDeviceID)")
-            loadAirPodsFromDualPodsDevice(existingDevice)
-            return
+            // Destroy and recreate to ensure it's configured correctly
+            print("🗑️ Found existing DualPods device, recreating to ensure correct configuration...")
+            AudioHardwareDestroyAggregateDevice(existingDevice.id)
         }
 
-        // Create it if it doesn't exist
+        // Create fresh device
         createDualPodsDevice()
     }
 
