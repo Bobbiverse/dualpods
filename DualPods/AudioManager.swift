@@ -182,10 +182,11 @@ final class AudioManager: ObservableObject {
             print("   [\(index)] \(device.name) (UID: \(device.uid))")
         }
 
-        let subDevices: [[String: Any]] = connectedAirPods.enumerated().map { index, device in
+        // NO drift correction for multi-output (both devices = 0)
+        let subDevices: [[String: Any]] = connectedAirPods.map { device in
             [
                 kAudioSubDeviceUIDKey: device.uid,
-                kAudioSubDeviceDriftCompensationKey: index == 0 ? 0 : 1
+                kAudioSubDeviceDriftCompensationKey: 0  // No drift correction for simultaneous output
             ] as [String: Any]
         }
 
@@ -195,7 +196,7 @@ final class AudioManager: ObservableObject {
             kAudioAggregateDeviceSubDeviceListKey: subDevices,
             kAudioAggregateDeviceMasterSubDeviceKey: connectedAirPods[0].uid,
             kAudioAggregateDeviceIsPrivateKey: 0,
-            kAudioAggregateDeviceIsStackedKey: 0
+            kAudioAggregateDeviceIsStackedKey: 1  // CRITICAL: 1 = multi-output (stacked), 0 = aggregate
         ]
 
         var newDeviceID: AudioObjectID = kAudioObjectUnknown
