@@ -49,7 +49,8 @@ final class AudioManager: ObservableObject {
 
     private var aggregateDeviceID: AudioObjectID = kAudioObjectUnknown
     private var previousDefaultDevice: AudioObjectID = kAudioObjectUnknown
-    private var listenerBlock: AudioObjectPropertyListenerBlock?
+    private var deviceListListenerBlock: AudioObjectPropertyListenerBlock?
+    private var defaultDeviceListenerBlock: AudioObjectPropertyListenerBlock?
 
     static let aggregateDeviceName = "DualPods Multi-Output"
     static let aggregateDeviceUID = "com.dualpods.multi-output"
@@ -58,11 +59,13 @@ final class AudioManager: ObservableObject {
         print("🔊 AudioManager initializing...")
         refreshDevices()
         installDeviceListListener()
+        installDefaultDeviceListener()
     }
 
     deinit {
         deactivate()
         removeDeviceListListener()
+        removeDefaultDeviceListener()
     }
 
     // MARK: - Device Enumeration
@@ -460,7 +463,7 @@ final class AudioManager: ObservableObject {
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.refreshDevices()
         }
-        self.listenerBlock = block
+        self.deviceListListenerBlock = block
 
         AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
@@ -471,7 +474,7 @@ final class AudioManager: ObservableObject {
     }
 
     private func removeDeviceListListener() {
-        guard let block = listenerBlock else { return }
+        guard let block = deviceListListenerBlock else { return }
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -483,5 +486,57 @@ final class AudioManager: ObservableObject {
             DispatchQueue.main,
             block
         )
+    }
+    
+    // MARK: - Default Device Listener (Fix for YouTube skip bug)
+    
+    private func installDefaultDeviceListener() {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleDefaultDeviceChanged()
+        }
+        self.defaultDeviceListenerBlock = block
+        
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            DispatchQueue.main,
+            block
+        )
+    }
+    
+    private func removeDefaultDeviceListener() {
+        guard let block = defaultDeviceListenerBlock else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            DispatchQueue.main,
+            block
+        )
+    }
+    
+    /// Called when the system default output device changes
+    /// If we're active and the default switched away from our multi-output, switch it back
+    private func handleDefaultDeviceChanged() {
+        guard isActive else { return }
+        
+        let currentDefault = getCurrentDefaultOutputDevice()
+        
+        // If we're active but the default device is not our aggregate, restore it
+        if aggregateDeviceID != kAudioObjectUnknown && currentDefault != aggregateDeviceID {
+            print("⚠️ Default device changed while multi-output active (YouTube skip?) - restoring...")
+            setDefaultOutputDevice(aggregateDeviceID)
+            print("✅ Multi-output restored as default device")
+        }
     }
 }
