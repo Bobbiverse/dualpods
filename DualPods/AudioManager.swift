@@ -122,6 +122,11 @@ final class AudioManager: ObservableObject {
             return
         }
 
+        print("🔧 Creating DualPods device with \(connectedAirPods.count) AirPods:")
+        for (index, device) in connectedAirPods.enumerated() {
+            print("   [\(index)] \(device.name) (UID: \(device.uid))")
+        }
+
         let subDevices: [[String: Any]] = connectedAirPods.enumerated().map { index, device in
             [
                 kAudioSubDeviceUIDKey: device.uid,
